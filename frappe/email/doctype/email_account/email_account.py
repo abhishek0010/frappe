@@ -101,6 +101,7 @@ class EmailAccount(Document):
 		password: DF.Password | None
 		send_notification_to: DF.SmallText | None
 		send_unsubscribe_message: DF.Check
+		sent_folder_name: DF.Data | None
 		service: DF.Literal[
 			"", "Frappe Mail", "GMail", "Sendgrid", "SparkPost", "Yahoo Mail", "Outlook.com", "Yandex.Mail"
 		]
@@ -141,6 +142,9 @@ class EmailAccount(Document):
 				frappe.throw(_("Login Id is required"))
 		else:
 			self.login_id = None
+
+		if self.service == "Sendgrid":
+			self.login_id = "apikey"
 
 		if self.service == "Frappe Mail":
 			self.use_imap = 0
@@ -248,6 +252,10 @@ class EmailAccount(Document):
 			enable_outgoing=self.enable_outgoing,
 			used_oauth=self.auth_method == "OAuth",
 		)
+
+	def clear_cache(self):
+		super().clear_cache()
+		frappe.client_cache.delete_value("automatic_linking_email")
 
 	def there_must_be_only_one_default(self):
 		"""If current Email Account is default, un-default all other accounts."""
@@ -774,7 +782,10 @@ class EmailAccount(Document):
 		try:
 			email_server = self.get_incoming_server(in_receive=True)
 			message = safe_encode(message)
-			email_server.imap.append("Sent", "\\Seen", imaplib.Time2Internaldate(time.time()), message)
+			sent_folder_name = self.sent_folder_name or "Sent"
+			email_server.imap.append(
+				sent_folder_name, "\\Seen", imaplib.Time2Internaldate(time.time()), message
+			)
 		except Exception:
 			self.log_error("Unable to add to Sent folder")
 
@@ -1034,6 +1045,15 @@ def set_email_password(email_account, password):
 			return False
 
 	return True
+
+
+def get_automatic_email_link():
+	def check_db():
+		return frappe.db.get_value(
+			"Email Account", {"enable_incoming": 1, "enable_automatic_linking": 1}, "email_id"
+		)
+
+	return frappe.client_cache.get_value("automatic_linking_email", generator=check_db)
 
 
 def on_doctype_update() -> None:

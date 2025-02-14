@@ -17,6 +17,9 @@ on:
         required: false
         type: number
         default: 20
+      db-artifact-url:
+        required: false
+        type: string
 jobs:
   migration-test:
     name: Migrate
@@ -37,12 +40,12 @@ jobs:
         env:
           MARIADB_ROOT_PASSWORD: ${{ env.DB_ROOT_PASSWORD }}
     steps:
-    - uses: frappe/frappe/.github/actions/setup@develop
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
       name: Environment Setup
       with:
         python-version: ${{ inputs.python-version }}
         node-version: ${{ inputs.node-version }}
-        build-assets: false
         disable-socketio: true
         disable-web: true
         db-root-password: ${{ env.DB_ROOT_PASSWORD }}
@@ -53,14 +56,14 @@ jobs:
         ${{ inputs.pre }}
 
     - name: Download database artifact
+      env:
+        DB_ARTIFACT_URL: ${{ inputs.db-artifact-url }}
       run: |
-        eval "$(tombl -e MIGRATION_DB=tool.frappe-ci.setup.migration-db ${GITHUB_WORKSPACE}/apps/${{ github.event.repository.name }}/pyproject.toml)" || exit 0
         source ${GITHUB_WORKSPACE}/env/bin/activate
-        wget "$MIGRATION_DB"
-        bench --site test_site --force restore ${GITHUB_WORKSPACE}/$(basename "$MIGRATION_DB")
+        wget "$DB_ARTIFACT_URL"
+        bench --site test_site --force restore ${GITHUB_WORKSPACE}/$(basename "$DB_ARTIFACT_URL")
 
         function update_to_version() {
-            eval "$(tombl -e FRAPPE_DEPENDENCIES=tool.bench.frappe-dependencies ${GITHUB_WORKSPACE}/apps/${{ github.event.repository.name }}/pyproject.toml)" || true
             version="$1"
             if [ -z "$version" ]; then
                 base_ref="${{ github.base_ref || github.ref_name }}"
@@ -72,7 +75,7 @@ jobs:
 
             source ${GITHUB_WORKSPACE}/env/bin/activate
             echo "Updating to version ${version:-$head_ref}"
-    
+
             # Fetch and checkout branches
             for app in ${GITHUB_WORKSPACE}/apps/*/; do
                 app_name=$(basename "$app")
@@ -101,16 +104,14 @@ jobs:
             if pgrep honcho > /dev/null; then
                 echo "Stopping honcho process..."
                 pgrep honcho | xargs kill
-                sleep 3
+                sleep 10
             fi
 
             echo "Setting up environment..."
             if rm -rf ${GITHUB_WORKSPACE}/env && python -m venv ${GITHUB_WORKSPACE}/env; then
                 source ${GITHUB_WORKSPACE}/env/bin/activate
                 pip install --quiet --upgrade pip
-                # pip install --quiet frappe-bench
-                # revert after merge: https://github.com/frappe/bench/pull/1600
-                pip install --quiet git+https://github.com/blaggacao/bench.git@feat/add-direct-config-module-calling
+                pip install --quiet frappe-bench
                 echo "Environment setup completed."
             else
                 echo "Environment setup failed." >&2
